@@ -5,6 +5,11 @@ name = "DepositDrop"
 application_url = "https://example.com"
 embedded = true
 
+[app_proxy]
+url = "/app-proxy"
+subpath = "deposit-drop"
+prefix = "apps"
+
 [build]
 automatically_update_urls_on_dev = true
 

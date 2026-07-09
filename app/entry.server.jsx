@@ -14,12 +14,13 @@ export default async function handleRequest(
   reactRouterContext,
 ) {
   const url = new URL(request.url);
-  const isApiRoute = url.pathname.startsWith("/api/");
+  const isPublicApiRoute =
+    url.pathname.startsWith("/api/") || url.pathname.startsWith("/app-proxy/");
 
-  // For API routes, bypass CSRF checks by modifying the request origin
+  // For API and app-proxy routes, bypass CSRF checks by modifying the request origin
   // This allows Shopify extension iframe requests (from extensions.shopifycdn.com)
   // to reach our backend on the tunnel URL
-  if (isApiRoute) {
+  if (isPublicApiRoute) {
     const origin = request.headers.get("origin");
     const isTrustedOrigin = origin?.includes("shopifycdn.com") ||
                             origin?.includes("localhost") ||
@@ -75,10 +76,11 @@ export default async function handleRequest(
 // Export an error handler to bypass CSRF checks for API routes
 export function handleError(error, { request }) {
   const url = new URL(request.url);
-  const isApiRoute = url.pathname.startsWith("/api/");
+  const isPublicApiRoute =
+    url.pathname.startsWith("/api/") || url.pathname.startsWith("/app-proxy/");
 
-  // If it's a CSRF error on an API route from a trusted origin, allow it
-  if (isApiRoute && error?.message?.includes("host does not match")) {
+  // If it's a CSRF error on a public API route from a trusted origin, allow it
+  if (isPublicApiRoute && error?.message?.includes("host does not match")) {
     const origin = request.headers.get("origin");
     const isTrustedOrigin = origin?.includes("shopifycdn.com") ||
                             origin?.includes("localhost") ||

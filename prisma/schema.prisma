@@ -38,6 +38,9 @@ model Plan {
   name        String
   slug        String         @unique
   description String
+  features    String         @default("[]")
+  popular     Boolean        @default(false)
+  uploadLimit Int            @default(5)
   priceCents  Int
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
@@ -58,6 +61,7 @@ model BankDepositReceipt {
   id         Int      @id @default(autoincrement())
   shop       String
   orderId    String?
+  orderName  String?
   checkoutId String?
   filename   String
   mimeType   String

@@ -19,6 +19,10 @@ uid = "e9c980e5-6ad6-a57a-b054-40f01ae841847b5a1633"
 module = "./src/Checkout.jsx"
 target = "purchase.checkout.payment-method-list.render-after"
 
+[[extensions.targeting]]
+module = "./src/ThankYouLink.jsx"
+target = "purchase.thank-you.block.render"
+
 [extensions.capabilities]
 # Gives your extension access to directly query Shopify’s storefront API.
 # https://shopify.dev/docs/api/checkout-ui-extensions/latest/configuration#api-access
@@ -37,7 +41,7 @@ network_access = true
 key = "backend_api_url"
 type = "single_line_text_field"
 name = "Backend API URL"
-description = "Your app tunnel URL + /api/bank-deposit-receipt (example: https://your-tunnel.trycloudflare.com/api/bank-deposit-receipt). Update this whenever you restart shopify app dev."
+description = "Your app's current backend URL (e.g. https://your-tunnel.trycloudflare.com). Used by both the upload and order-linking extensions."
 
 # Loads metafields on checkout resources, including the cart,
 # products, customers, and more. Learn more:

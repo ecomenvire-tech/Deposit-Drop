@@ -1,6 +1,7 @@
 import '@shopify/ui-extensions/preact';
 import {render} from 'preact';
 import {useState, useEffect, useRef} from 'preact/hooks';
+import {getDirectBackendUrl} from './backend-url';
 
 export default function extension() {
   render(<Extension />, document.body);
@@ -43,19 +44,12 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-function getBackendUrl() {
-  const configuredUrl = shopify.settings?.value?.backend_api_url?.trim();
-  const DEFAULT_TUNNEL_URL = 'https://serious-closer-indicating-erp.trycloudflare.com';
-  const baseUrl = configuredUrl || DEFAULT_TUNNEL_URL;
-  const normalizedBase = baseUrl.replace(/\/+$|\/api(\/bank-deposit-receipt)?$/i, '');
-
-  if (!configuredUrl) {
-    console.warn(
-      'Backend API URL not configured in extension settings, falling back to tunnel URL.',
-    );
-  }
-
-  return `${normalizedBase}/api/bank-deposit-receipt`;
+function getCandidateEndpoints() {
+  const url = getDirectBackendUrl(
+    shopify.settings?.value?.backend_api_url,
+    '/api/bank-deposit-receipt',
+  );
+  return url ? [{ label: 'app backend', url }] : [];
 }
 
 function Extension() {
@@ -94,14 +88,23 @@ function Extension() {
       return;
     }
 
-    const backendUrl = getBackendUrl();
-    if (!backendUrl) {
-      setErrorMessage('Backend URL is not configured in extension settings.');
+    const candidates = getCandidateEndpoints();
+    if (candidates.length === 0) {
+      setErrorMessage('Backend URL is not configured and the shop domain is unavailable.');
       setReceiptUploaded(false);
       return;
     }
 
-    console.log('✅ Upload backend URL:', backendUrl);
+    console.log(
+      '[bank-deposit-receipt] Upload started. Endpoint candidates (in order):',
+      candidates.map((c) => `${c.label} -> ${c.url}`),
+    );
+    console.log('[bank-deposit-receipt] File:', {
+      name: receiptFile.name,
+      type: receiptFile.type,
+      size: receiptFile.size,
+    });
+
     setUploading(true);
     setErrorMessage(null);
 
@@ -110,23 +113,47 @@ function Extension() {
       const fileBuffer = await receiptFile.arrayBuffer();
       const checkoutId = shopify.checkoutToken?.value ?? shopify.checkoutToken ?? null;
 
-      const response = await fetch(backendUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest',
+      console.log('[bank-deposit-receipt] Session token acquired, sending request');
+
+      const requestBody = JSON.stringify({
+        file: {
+          name: receiptFile.name,
+          type: receiptFile.type || 'application/octet-stream',
+          size: receiptFile.size,
+          data: arrayBufferToBase64(fileBuffer),
         },
-        body: JSON.stringify({
-          file: {
-            name: receiptFile.name,
-            type: receiptFile.type || 'application/octet-stream',
-            size: receiptFile.size,
-            data: arrayBufferToBase64(fileBuffer),
-          },
-          checkoutId,
-        }),
+        checkoutId,
       });
+
+      let response = null;
+      let lastNetworkError = null;
+
+      for (const candidate of candidates) {
+        console.log(`[bank-deposit-receipt] Trying ${candidate.label}:`, candidate.url);
+        try {
+          response = await fetch(candidate.url, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: requestBody,
+          });
+          console.log(`[bank-deposit-receipt] ${candidate.label} responded with status`, response.status);
+          break;
+        } catch (networkError) {
+          lastNetworkError = networkError;
+          console.error(
+            `[bank-deposit-receipt] ${candidate.label} unreachable (${candidate.url}):`,
+            networkError?.message,
+          );
+        }
+      }
+
+      if (!response) {
+        throw lastNetworkError || new Error('All upload endpoints were unreachable.');
+      }
 
       const text = await response.text();
       let result = {};
@@ -137,15 +164,25 @@ function Extension() {
       }
 
       if (!response.ok) {
-        throw new Error(result?.error || `HTTP ${response.status}: Receipt upload failed.`);
+        throw new Error(result?.error || result?.message || `HTTP ${response.status}: Receipt upload failed.`);
       }
 
+      console.log('[bank-deposit-receipt] Upload success:', result);
       setReceiptUploaded(true);
       setErrorMessage(null);
     } catch (error) {
-      console.error('Receipt upload failed:', error);
+      console.error('[bank-deposit-receipt] Upload failure:', error);
+      console.error('[bank-deposit-receipt] Error stack:', error?.stack);
       setReceiptUploaded(false);
-      setErrorMessage(error?.message || 'Receipt upload failed.');
+
+      const message = error?.message || 'Receipt upload failed.';
+      if (message.includes('Failed to fetch') || message.includes('unreachable')) {
+        setErrorMessage(
+          'Could not reach the upload server. Confirm the app is running (`npm run dev`) and try again.',
+        );
+      } else {
+        setErrorMessage(message);
+      }
     } finally {
       setUploading(false);
     }
