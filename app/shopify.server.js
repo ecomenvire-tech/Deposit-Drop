@@ -4,9 +4,13 @@ import {
   AppDistribution,
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
+import { BillingInterval } from "@shopify/shopify-api";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 
+// Real Shopify-billed plans. The "free" tier is intentionally absent here -
+// it's never charged, so it's only tracked in our own Plan/Subscription
+// tables (see app/lib/plans.server.js), not through Shopify's Billing API.
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
@@ -16,6 +20,23 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  future: {
+    expiringOfflineAccessTokens: true,
+  },
+  billing: {
+    starter: {
+      trialDays: 7,
+      lineItems: [
+        { amount: 15, currencyCode: "USD", interval: BillingInterval.Every30Days },
+      ],
+    },
+    advance: {
+      trialDays: 7,
+      lineItems: [
+        { amount: 25, currencyCode: "USD", interval: BillingInterval.Every30Days },
+      ],
+    },
+  },
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),

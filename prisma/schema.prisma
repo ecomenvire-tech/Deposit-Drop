@@ -48,13 +48,14 @@ model Plan {
 }
 
 model Subscription {
-  id        Int      @id @default(autoincrement())
-  shop      String
-  plan      Plan     @relation(fields: [planId], references: [id])
-  planId    Int
-  status    String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                     Int      @id @default(autoincrement())
+  shop                   String
+  plan                   Plan     @relation(fields: [planId], references: [id])
+  planId                 Int
+  status                 String
+  shopifySubscriptionId  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 }
 
 model BankDepositReceipt {

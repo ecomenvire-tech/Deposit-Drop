@@ -1,11 +1,16 @@
 import { Form, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { FEATURE_LIST } from "../lib/plans";
-import { ensurePlansSeeded } from "../lib/plans.server";
+import {
+  BILLING_IS_TEST,
+  PAID_PLAN_SLUGS,
+  ensurePlansSeeded,
+  syncActiveSubscriptionFromBilling,
+} from "../lib/plans.server";
 import db from "../db.server";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
   const shop = session.shop;
 
   const canonicalSlugs = await ensurePlansSeeded();
@@ -15,29 +20,48 @@ export const loader = async ({ request }) => {
     orderBy: { priceCents: "asc" },
   });
 
-  const activeSubscription = await db.subscription.findFirst({
-    where: { shop, status: "active" },
-    orderBy: { createdAt: "desc" },
-  });
+  // Shopify is the source of truth for what's actually billed. Reconcile
+  // our local mirror with it on every visit so upload-limit enforcement
+  // (which reads the local table) never drifts from what the merchant is
+  // really paying for.
+  let billingCheck;
+  try {
+    billingCheck = await billing.check({ plans: PAID_PLAN_SLUGS, isTest: BILLING_IS_TEST });
+  } catch (error) {
+    console.error("[bank-deposit-receipt] billing.check failed:", error?.message);
+    console.error(
+      "[bank-deposit-receipt] billing.check response body:",
+      JSON.stringify(error?.response?.body, null, 2),
+    );
+    throw error;
+  }
+  const activeSubscription = await syncActiveSubscriptionFromBilling(shop, billingCheck);
+
+  const activePlan = activeSubscription
+    ? plans.find((plan) => plan.id === activeSubscription.planId)
+    : plans.find((plan) => plan.slug === "free");
 
   return {
     shop,
     plans,
-    activePlanId: activeSubscription?.planId ?? null,
-    activeSubscriptionId: activeSubscription?.id ?? null,
+    activePlanId: activePlan?.id ?? null,
+    activeShopifySubscriptionId: activeSubscription?.shopifySubscriptionId ?? null,
   };
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
   const intent = formData.get("intent");
 
   if (intent === "cancel") {
-    const subscriptionId = Number(formData.get("subscriptionId"));
+    const subscriptionId = formData.get("subscriptionId");
+    if (subscriptionId) {
+      await billing.cancel({ subscriptionId, isTest: BILLING_IS_TEST, prorate: true });
+    }
     await db.subscription.updateMany({
-      where: { id: subscriptionId, shop, status: "active" },
+      where: { shop, status: "active" },
       data: { status: "cancelled" },
     });
     return { success: "Subscription cancelled." };
@@ -53,24 +77,58 @@ export const action = async ({ request }) => {
     return { error: "Selected plan was not found." };
   }
 
-  await db.subscription.updateMany({
-    where: { shop, status: "active" },
-    data: { status: "cancelled" },
+  if (plan.priceCents === 0) {
+    // Free plan: nothing to bill. Cancel any real Shopify subscription first.
+    const billingCheck = await billing.check({ plans: PAID_PLAN_SLUGS, isTest: BILLING_IS_TEST });
+    for (const appSubscription of billingCheck.appSubscriptions) {
+      await billing.cancel({
+        subscriptionId: appSubscription.id,
+        isTest: BILLING_IS_TEST,
+        prorate: true,
+      });
+    }
+
+    await db.subscription.updateMany({
+      where: { shop, status: "active" },
+      data: { status: "cancelled" },
+    });
+    await db.subscription.create({ data: { shop, planId: plan.id, status: "active" } });
+
+    return { success: "Switched to the Free plan." };
+  }
+
+  // Paid plan: this always throws a redirect to Shopify's approval page on
+  // success. On failure it throws a BillingError (a plain Error, not a
+  // Response) - catch that specifically so we can log Shopify's actual
+  // userErrors detail instead of a bare "Error while billing the store".
+  //
+  // No returnUrl is passed here on purpose: without one, the library builds
+  // a proper Shopify-hosted embedded app URL (admin.shopify.com/store/...)
+  // to return to after approval. A custom bare app/tunnel URL doesn't carry
+  // the shop/host params our embedding logic needs, so the merchant's
+  // browser gets stuck outside the embedded frame with nowhere to bounce
+  // back to.
+  console.log("[bank-deposit-receipt] Requesting billing for plan:", plan.slug, {
+    isTest: BILLING_IS_TEST,
   });
 
-  const subscription = await db.subscription.create({
-    data: { shop, planId, status: "active" },
-  });
+  try {
+    await billing.request({
+      plan: plan.slug,
+      isTest: BILLING_IS_TEST,
+    });
+  } catch (error) {
+    if (error instanceof Response) {
+      throw error;
+    }
+    console.error("[bank-deposit-receipt] billing.request failed:", error?.message);
+    console.error("[bank-deposit-receipt] billing.request errorData:", JSON.stringify(error?.errorData));
+    return {
+      error: `Billing request failed: ${error?.errorData?.[0]?.message || error?.message || "unknown error"}`,
+    };
+  }
 
-  return {
-    success: `Subscribed to the ${plan.name} plan successfully.`,
-    subscription: {
-      id: subscription.id,
-      planName: plan.name,
-      priceCents: plan.priceCents,
-      status: subscription.status,
-    },
-  };
+  return null;
 };
 
 const CARD_STYLE = {
@@ -80,7 +138,7 @@ const CARD_STYLE = {
 };
 
 export default function Plans() {
-  const { plans, activePlanId, activeSubscriptionId } = useLoaderData();
+  const { plans, activePlanId, activeShopifySubscriptionId } = useLoaderData();
   const actionData = useActionData();
 
   const planFeatureKeys = Object.fromEntries(
@@ -165,16 +223,29 @@ export default function Plans() {
                       </s-stack>
                     )}
 
-                    {isActive ? (
+                    {isActive && plan.priceCents > 0 ? (
                       <Form method="post">
                         <input type="hidden" name="intent" value="cancel" />
-                        <input type="hidden" name="subscriptionId" value={activeSubscriptionId} />
+                        <input
+                          type="hidden"
+                          name="subscriptionId"
+                          value={activeShopifySubscriptionId ?? ""}
+                        />
                         <s-button type="submit" variant="secondary">
                           Cancel the plan
                         </s-button>
                       </Form>
-                    ) : (
-                      <Form method="post">
+                    ) : isActive ? null : (
+                      // reloadDocument forces a real full-page form POST
+                      // instead of a fetch-based SPA transition. Paid plans
+                      // redirect out of the embedded iframe to Shopify's own
+                      // billing approval page, and that special redirect
+                      // signal only reaches the browser correctly on a real
+                      // navigation - a fetch/XHR submission gets a 401 with
+                      // custom headers instead, which React Router's single
+                      // fetch data layer doesn't relay, leaving the page
+                      // stuck.
+                      <Form method="post" reloadDocument>
                         <input type="hidden" name="planId" value={plan.id} />
                         <s-button type="submit" variant="primary">
                           Choose this plan

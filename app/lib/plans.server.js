@@ -1,6 +1,17 @@
 import db from "../db.server";
 import { CANONICAL_PLANS, toPlanRow } from "./plans";
 
+// Defaults to test mode (no real charges) unless explicitly disabled for a
+// production launch: set SHOPIFY_BILLING_TEST_MODE=false in the environment.
+export const BILLING_IS_TEST = process.env.SHOPIFY_BILLING_TEST_MODE !== "false";
+
+// Plan slugs that are billed through Shopify (must match the keys under
+// `billing` in app/shopify.server.js). The Free plan is excluded - it's
+// never charged, so it only ever exists in our own tables.
+export const PAID_PLAN_SLUGS = CANONICAL_PLANS.filter((plan) => plan.priceCents > 0).map(
+  (plan) => plan.slug,
+);
+
 // Upserts the current canonical plan set and removes any older/renamed plan
 // rows that nothing is subscribed to. Safe to call on every Plans page load.
 export async function ensurePlansSeeded() {
@@ -43,5 +54,63 @@ export async function getEffectivePlanForShop(shop) {
     where: { slug: "free" },
     update: {},
     create: { slug: "free", ...toPlanRow(freePlanDefaults) },
+  });
+}
+
+// Reconciles our local Subscription mirror with Shopify's real billing
+// state, so the rest of the app (upload-limit enforcement, the Plans page)
+// can keep reading a simple local "active" row instead of calling Shopify's
+// Billing API on every request. Call this after billing.check().
+export async function syncActiveSubscriptionFromBilling(shop, billingCheckResult) {
+  const activeAppSubscription = billingCheckResult.appSubscriptions[0] ?? null;
+
+  if (!activeAppSubscription) {
+    // No active Shopify subscription - the shop is effectively on the Free
+    // plan. Make sure our local mirror doesn't still say otherwise.
+    const currentActive = await db.subscription.findFirst({
+      where: { shop, status: "active" },
+      include: { plan: true },
+    });
+    if (currentActive && currentActive.plan.slug !== "free") {
+      await db.subscription.updateMany({
+        where: { shop, status: "active" },
+        data: { status: "cancelled" },
+      });
+    }
+    return null;
+  }
+
+  const plan = await db.plan.findUnique({ where: { slug: activeAppSubscription.name } });
+  if (!plan) {
+    console.warn(
+      `[plans] Active Shopify subscription name "${activeAppSubscription.name}" doesn't match any known plan slug`,
+    );
+    return null;
+  }
+
+  const alreadySynced = await db.subscription.findFirst({
+    where: {
+      shop,
+      status: "active",
+      planId: plan.id,
+      shopifySubscriptionId: activeAppSubscription.id,
+    },
+  });
+  if (alreadySynced) {
+    return alreadySynced;
+  }
+
+  await db.subscription.updateMany({
+    where: { shop, status: "active" },
+    data: { status: "cancelled" },
+  });
+
+  return db.subscription.create({
+    data: {
+      shop,
+      planId: plan.id,
+      status: "active",
+      shopifySubscriptionId: activeAppSubscription.id,
+    },
   });
 }
