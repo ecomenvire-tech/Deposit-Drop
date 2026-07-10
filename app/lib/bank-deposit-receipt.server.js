@@ -1,5 +1,5 @@
 import db from "../db.server";
-import { getEffectivePlanForShop } from "./plans.server";
+import { getUsageForShop } from "./plans.server";
 
 export function getShopFromSessionToken(sessionToken) {
   const dest = sessionToken?.dest ?? "";
@@ -99,23 +99,20 @@ export function createJsonResponse(body, status = 200) {
 export async function handleBankDepositReceiptUpload(request, shop) {
   console.log("[bank-deposit-receipt] Upload started for shop:", shop);
 
-  const plan = await getEffectivePlanForShop(shop);
-  const startOfMonth = new Date();
-  startOfMonth.setDate(1);
-  startOfMonth.setHours(0, 0, 0, 0);
+  const { plan, uploadsThisMonth, limitReached } = await getUsageForShop(shop);
 
-  const uploadsThisMonth = await db.bankDepositReceipt.count({
-    where: { shop, createdAt: { gte: startOfMonth } },
-  });
-
-  if (uploadsThisMonth >= plan.uploadLimit) {
+  if (limitReached) {
+    // This is a merchant billing/plan concern, not something the buyer at
+    // checkout should see or needs to act on - the detailed reason is
+    // logged here for the merchant/admin, but the buyer only gets a
+    // generic, non-technical message.
     console.warn(
       `[bank-deposit-receipt] Upload limit reached for shop ${shop}: ` +
         `${uploadsThisMonth}/${plan.uploadLimit} (${plan.name} plan)`,
     );
     return createJsonResponse(
       {
-        error: `You've reached your ${plan.name} plan's limit of ${plan.uploadLimit} receipt uploads this month. Upgrade your plan to continue.`,
+        error: "Receipt upload is temporarily unavailable. Please contact the store for help completing your order.",
       },
       403,
     );

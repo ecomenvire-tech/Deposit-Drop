@@ -57,6 +57,29 @@ export async function getEffectivePlanForShop(shop) {
   });
 }
 
+// The shop's effective plan plus its current calendar-month receipt upload
+// usage against that plan's limit. Shared by the upload-limit enforcement
+// (app/lib/bank-deposit-receipt.server.js) and the admin Dashboard banner,
+// so both always agree on the same numbers.
+export async function getUsageForShop(shop) {
+  const plan = await getEffectivePlanForShop(shop);
+
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const uploadsThisMonth = await db.bankDepositReceipt.count({
+    where: { shop, createdAt: { gte: startOfMonth } },
+  });
+
+  return {
+    plan,
+    uploadsThisMonth,
+    remaining: Math.max(0, plan.uploadLimit - uploadsThisMonth),
+    limitReached: uploadsThisMonth >= plan.uploadLimit,
+  };
+}
+
 // Reconciles our local Subscription mirror with Shopify's real billing
 // state, so the rest of the app (upload-limit enforcement, the Plans page)
 // can keep reading a simple local "active" row instead of calling Shopify's

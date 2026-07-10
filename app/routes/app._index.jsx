@@ -1,13 +1,14 @@
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+import { getUsageForShop } from "../lib/plans.server";
 import db from "../db.server";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const [totalReceipts, linkedReceipts, recentReceipts, activeSubscription] =
+  const [totalReceipts, linkedReceipts, recentReceipts, usage] =
     await Promise.all([
       db.bankDepositReceipt.count({ where: { shop } }),
       db.bankDepositReceipt.count({ where: { shop, orderId: { not: null } } }),
@@ -17,11 +18,7 @@ export const loader = async ({ request }) => {
         take: 5,
         select: { id: true, filename: true, orderId: true, orderName: true, createdAt: true },
       }),
-      db.subscription.findFirst({
-        where: { shop, status: "active" },
-        include: { plan: true },
-        orderBy: { createdAt: "desc" },
-      }),
+      getUsageForShop(shop),
     ]);
 
   return {
@@ -29,13 +26,24 @@ export const loader = async ({ request }) => {
     linkedReceipts,
     pendingReceipts: totalReceipts - linkedReceipts,
     recentReceipts,
-    planName: activeSubscription?.plan.name ?? null,
+    planName: usage.plan.name,
+    uploadsThisMonth: usage.uploadsThisMonth,
+    uploadLimit: usage.plan.uploadLimit,
+    limitReached: usage.limitReached,
   };
 };
 
 export default function Dashboard() {
-  const { totalReceipts, linkedReceipts, pendingReceipts, recentReceipts, planName } =
-    useLoaderData();
+  const {
+    totalReceipts,
+    linkedReceipts,
+    pendingReceipts,
+    recentReceipts,
+    planName,
+    uploadsThisMonth,
+    uploadLimit,
+    limitReached,
+  } = useLoaderData();
 
   return (
     <s-page heading="Dashboard">
@@ -48,6 +56,17 @@ export default function Dashboard() {
           </s-paragraph>
         </s-stack>
       </s-section>
+
+      {limitReached ? (
+        <s-section>
+          <s-banner status="critical">
+            <s-paragraph>
+              {`You've used ${uploadsThisMonth}/${uploadLimit} receipt uploads this month on your ${planName} plan. New receipt uploads at checkout will be blocked until you upgrade or next month starts.`}
+            </s-paragraph>
+            <s-link href="/app/plans">Upgrade your plan</s-link>
+          </s-banner>
+        </s-section>
+      ) : null}
 
       <s-section heading="Overview">
         <s-stack direction="inline" gap="base">

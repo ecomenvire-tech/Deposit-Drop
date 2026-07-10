@@ -57,6 +57,7 @@ function Extension() {
   const [errorMessage, setErrorMessage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [hasBankDepositSelected, setHasBankDepositSelected] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
   const dropZoneRef = useRef(null);
 
   const getSelectedFile = (event) => {
@@ -76,7 +77,23 @@ function Extension() {
     if (!receiptFile) {
       setErrorMessage('Please select a receipt image.');
       setReceiptUploaded(false);
+      setPreviewUrl(null);
       return;
+    }
+
+    // Show a local preview immediately, before the upload even starts - this
+    // never leaves the browser. A base64 data URL is used instead of
+    // URL.createObjectURL() because the checkout image component doesn't
+    // reliably detect when a blob: URL has finished loading, leaving the
+    // thumbnail invisible forever.
+    try {
+      const previewBuffer = await receiptFile.arrayBuffer();
+      setPreviewUrl(
+        `data:${receiptFile.type || 'image/jpeg'};base64,${arrayBufferToBase64(previewBuffer)}`,
+      );
+    } catch (previewError) {
+      console.error('[bank-deposit-receipt] Preview generation failed:', previewError);
+      setPreviewUrl(null);
     }
 
     const MAX_SIZE = 5 * 1024 * 1024;
@@ -218,6 +235,7 @@ function Extension() {
       if (!isBankDeposit) {
         setReceiptUploaded(false);
         setErrorMessage(null);
+        setPreviewUrl(null);
         if (dropZoneRef.current) {
           dropZoneRef.current.value = '';
         }
@@ -291,16 +309,41 @@ function Extension() {
     <s-section heading="Bank Deposit Receipt">
       <s-stack direction="block" gap="base">
         {errorMessage ? <s-text tone="critical">{errorMessage}</s-text> : null}
+        {!errorMessage && receiptUploaded ? (
+          <s-text tone="success">✓ Receipt image uploaded successfully.</s-text>
+        ) : null}
 
-        <s-drop-zone
-          ref={dropZoneRef}
-          label="Payment receipt upload (Required)"
-          name="bank-deposit-receipt"
-          required
-          accept="image/*"
-          loading={uploading}
-          onChange={uploadReceipt}
-        ></s-drop-zone>
+        <s-box maxInlineSize="188px">
+          <s-drop-zone
+            ref={dropZoneRef}
+            label="Payment receipt upload (Required)"
+            name="bank-deposit-receipt"
+            required
+            accept="image/*"
+            loading={uploading}
+            onChange={uploadReceipt}
+          ></s-drop-zone>
+        </s-box>
+
+        {previewUrl ? (
+          <s-stack direction="inline" gap="small-100">
+            <s-box
+              inlineSize="56px"
+              blockSize="56px"
+              borderRadius="base"
+              border="base"
+              overflow="hidden"
+            >
+              <s-image
+                src={previewUrl}
+                inlineSize="fill"
+                objectFit="cover"
+                accessibilityRole="presentation"
+              />
+            </s-box>
+            <s-text tone="neutral">Receipt preview</s-text>
+          </s-stack>
+        ) : null}
       </s-stack>
     </s-section>
   );
