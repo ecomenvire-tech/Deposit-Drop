@@ -6,6 +6,39 @@ export function getShopFromSessionToken(sessionToken) {
   return dest.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
+const MAX_RECEIPT_SIZE = 5 * 1024 * 1024;
+
+// Magic-byte signatures for the image formats the checkout drop-zone accepts
+// (accept="image/*"). The client already checks size/type, but that check is
+// trivially bypassed by calling this endpoint directly, so the real
+// enforcement has to happen here against the actual decoded bytes.
+const IMAGE_SIGNATURES = [
+  { mimeType: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },
+  { mimeType: "image/png", bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
+  { mimeType: "image/gif", bytes: [0x47, 0x49, 0x46, 0x38] },
+  { mimeType: "image/webp", bytes: [0x52, 0x49, 0x46, 0x46] }, // RIFF....WEBP
+  { mimeType: "image/bmp", bytes: [0x42, 0x4d] },
+];
+
+function matchesImageSignature(buffer) {
+  return IMAGE_SIGNATURES.some(({ bytes }) =>
+    bytes.every((byte, index) => buffer[index] === byte),
+  );
+}
+
+export function validateReceiptImage(imageData) {
+  if (!imageData.length) {
+    return "Uploaded receipt file is empty.";
+  }
+  if (imageData.length > MAX_RECEIPT_SIZE) {
+    return `File too large. Max size: 5MB, your file: ${(imageData.length / 1024 / 1024).toFixed(2)}MB`;
+  }
+  if (!matchesImageSignature(imageData)) {
+    return "Uploaded file is not a recognized image format.";
+  }
+  return null;
+}
+
 export async function parseReceiptUpload(request) {
   const contentType = request.headers.get("content-type") ?? "";
 
@@ -96,8 +129,31 @@ export function createJsonResponse(body, status = 200) {
   });
 }
 
+const STALE_UNLINKED_RECEIPT_HOURS = 24;
+
+// Receipts are saved as soon as a buyer selects a file - before the order
+// exists - so they can be linked to the order once it's created (see
+// api.link-receipt-order.jsx). If the buyer abandons checkout instead of
+// completing it, that row never gets an orderId and would sit around
+// forever. Deleting it immediately isn't safe (the order might still
+// complete a little later), so instead this opportunistically clears out
+// rows that have been unlinked for a full day - clearly abandoned checkouts,
+// not in-flight ones. Called on every upload rather than on a schedule,
+// since there's no cron infrastructure in place.
+export async function cleanupStaleUnlinkedReceipts(shop) {
+  const cutoff = new Date(Date.now() - STALE_UNLINKED_RECEIPT_HOURS * 60 * 60 * 1000);
+  const { count } = await db.bankDepositReceipt.deleteMany({
+    where: { shop, orderId: null, createdAt: { lt: cutoff } },
+  });
+  if (count > 0) {
+    console.log(`[bank-deposit-receipt] Cleaned up ${count} stale unlinked receipt(s) for ${shop}`);
+  }
+}
+
 export async function handleBankDepositReceiptUpload(request, shop) {
   console.log("[bank-deposit-receipt] Upload started for shop:", shop);
+
+  await cleanupStaleUnlinkedReceipts(shop);
 
   const { plan, uploadsThisMonth, limitReached } = await getUsageForShop(shop);
 
@@ -139,6 +195,12 @@ export async function handleBankDepositReceiptUpload(request, shop) {
     checkoutId,
     orderId,
   });
+
+  const validationError = validateReceiptImage(receipt.imageData);
+  if (validationError) {
+    console.warn("[bank-deposit-receipt] Rejected invalid upload:", validationError);
+    return createJsonResponse({ error: validationError }, 400);
+  }
 
   const savedReceipt = await db.bankDepositReceipt.create({
     data: {

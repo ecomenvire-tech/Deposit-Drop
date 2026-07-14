@@ -5,11 +5,6 @@ name = "DepositDrop"
 application_url = "https://example.com"
 embedded = true
 
-[app_proxy]
-url = "/app-proxy"
-subpath = "deposit-drop"
-prefix = "apps"
-
 [build]
 automatically_update_urls_on_dev = true
 
@@ -29,16 +24,8 @@ api_version = "2026-10"
   topics = [ "app_subscriptions/update" ]
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/customers/data_request"
-  topics = [ "customers/data_request" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/customers/redact"
-  topics = [ "customers/redact" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/shop/redact"
-  topics = [ "shop/redact" ]
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+  uri = "/webhooks/compliance"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes

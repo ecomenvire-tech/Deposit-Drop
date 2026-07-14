@@ -20,6 +20,12 @@ export const loader = async ({ request }) => {
 
   const where = {
     shop,
+    // Receipts only become meaningful to a merchant once they're tied to a
+    // real order - until then they're just an in-flight checkout upload
+    // (possibly abandoned) and would otherwise show up as confusing
+    // "Not linked yet" rows. Stale unlinked rows are cleaned up separately
+    // (see cleanupStaleUnlinkedReceipts) rather than hidden forever.
+    orderId: { not: null },
     ...(query
       ? {
           OR: [
@@ -291,16 +297,12 @@ export default function Receipts() {
                   </s-modal>
                 </s-table-cell>
                 <s-table-cell>
-                  {receipt.orderId ? (
-                    <s-link
-                      href={`https://${shop}/admin/orders/${receipt.orderId}`}
-                      target="_blank"
-                    >
-                      {receipt.orderName || `#${receipt.orderId}`}
-                    </s-link>
-                  ) : (
-                    <s-text tone="subdued">Not linked yet</s-text>
-                  )}
+                  <s-link
+                    href={`https://${shop}/admin/orders/${receipt.orderId}`}
+                    target="_blank"
+                  >
+                    {receipt.orderName || `#${receipt.orderId}`}
+                  </s-link>
                 </s-table-cell>
                 <s-table-cell>
                   <s-text>{new Date(receipt.createdAt).toLocaleString()}</s-text>

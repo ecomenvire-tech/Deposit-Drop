@@ -205,6 +205,14 @@ function Extension() {
     }
   };
 
+  const resetUploadState = () => {
+    setReceiptUploaded(false);
+    setPreviewUrl(null);
+    if (dropZoneRef.current) {
+      dropZoneRef.current.value = '';
+    }
+  };
+
   useEffect(() => {
     if (!hasBankDepositSelected) {
       setErrorMessage(null);
@@ -308,42 +316,39 @@ function Extension() {
   return (
     <s-section heading="Bank Deposit Receipt">
       <s-stack direction="block" gap="base">
-        {errorMessage ? <s-text tone="critical">{errorMessage}</s-text> : null}
-        {!errorMessage && receiptUploaded ? (
-          <s-text tone="success">✓ Receipt image uploaded successfully.</s-text>
-        ) : null}
+        {errorMessage ? <s-banner tone="critical">{errorMessage}</s-banner> : null}
 
-        <s-box maxInlineSize="188px">
-          <s-drop-zone
-            ref={dropZoneRef}
-            label="Payment receipt upload (Required)"
-            name="bank-deposit-receipt"
-            required
-            accept="image/*"
-            loading={uploading}
-            onChange={uploadReceipt}
-          ></s-drop-zone>
-        </s-box>
-
-        {previewUrl ? (
-          <s-stack direction="inline" gap="small-100">
-            <s-box
-              inlineSize="56px"
-              blockSize="56px"
-              borderRadius="base"
-              border="base"
-              overflow="hidden"
-            >
-              <s-image
-                src={previewUrl}
-                inlineSize="fill"
-                objectFit="cover"
-                accessibilityRole="presentation"
-              />
-            </s-box>
-            <s-text tone="neutral">Receipt preview</s-text>
-          </s-stack>
-        ) : null}
+        {receiptUploaded && previewUrl ? (
+          <s-box border="base" borderRadius="base" padding="base">
+            <s-stack direction="block" gap="base" alignItems="center">
+              <s-box inlineSize="180px" blockSize="180px" borderRadius="base" overflow="hidden">
+                <s-image
+                  src={previewUrl}
+                  inlineSize="fill"
+                  objectFit="cover"
+                  accessibilityRole="presentation"
+                />
+              </s-box>
+              <s-text>File uploaded</s-text>
+              <s-stack direction="inline" gap="small-100">
+                <s-button onClick={resetUploadState}>Replace file</s-button>
+                <s-button onClick={resetUploadState}>Remove file</s-button>
+              </s-stack>
+            </s-stack>
+          </s-box>
+        ) : (
+          <s-box maxInlineSize="188px">
+            <s-drop-zone
+              ref={dropZoneRef}
+              label="Payment receipt upload (Required)"
+              name="bank-deposit-receipt"
+              required
+              accept="image/*"
+              loading={uploading}
+              onChange={uploadReceipt}
+            ></s-drop-zone>
+          </s-box>
+        )}
       </s-stack>
     </s-section>
   );

@@ -13,7 +13,7 @@ export const loader = async ({ request }) => {
       db.bankDepositReceipt.count({ where: { shop } }),
       db.bankDepositReceipt.count({ where: { shop, orderId: { not: null } } }),
       db.bankDepositReceipt.findMany({
-        where: { shop },
+        where: { shop, orderId: { not: null } },
         orderBy: { createdAt: "desc" },
         take: 5,
         select: { id: true, filename: true, orderId: true, orderName: true, createdAt: true },
@@ -21,15 +21,17 @@ export const loader = async ({ request }) => {
       getUsageForShop(shop),
     ]);
 
+  const shopHandle = shop.replace(/\.myshopify\.com$/, "");
+
   return {
     totalReceipts,
     linkedReceipts,
-    pendingReceipts: totalReceipts - linkedReceipts,
     recentReceipts,
     planName: usage.plan.name,
     uploadsThisMonth: usage.uploadsThisMonth,
     uploadLimit: usage.plan.uploadLimit,
     limitReached: usage.limitReached,
+    checkoutSettingsUrl: `https://admin.shopify.com/store/${shopHandle}/settings/checkout`,
   };
 };
 
@@ -37,12 +39,12 @@ export default function Dashboard() {
   const {
     totalReceipts,
     linkedReceipts,
-    pendingReceipts,
     recentReceipts,
     planName,
     uploadsThisMonth,
     uploadLimit,
     limitReached,
+    checkoutSettingsUrl,
   } = useLoaderData();
 
   return (
@@ -54,6 +56,33 @@ export default function Dashboard() {
             Manage your bank deposit receipts, subscription plan, and monitor
             upload activity from one place.
           </s-paragraph>
+        </s-stack>
+      </s-section>
+
+      <s-section heading="Setup checklist">
+        <s-stack direction="block" gap="base">
+          <s-paragraph>
+            DepositDrop only appears at checkout once you've added its blocks
+            in the checkout editor. This is a one-time setup:
+          </s-paragraph>
+          <s-ordered-list>
+            <s-list-item>
+              Open your checkout editor using the button below.
+            </s-list-item>
+            <s-list-item>
+              On the <s-text tone="neutral">Checkout</s-text> page, add the
+              "Bank Deposit Receipt" app block under the payment methods
+              section.
+            </s-list-item>
+            <s-list-item>
+              Switch to the <s-text tone="neutral">Thank you</s-text> page
+              tab and add the "Order Link" app block there too.
+            </s-list-item>
+            <s-list-item>Save.</s-list-item>
+          </s-ordered-list>
+          <s-button href={checkoutSettingsUrl} target="_blank" variant="primary">
+            Open checkout editor
+          </s-button>
         </s-stack>
       </s-section>
 
@@ -84,12 +113,6 @@ export default function Dashboard() {
           </s-card>
           <s-card border>
             <s-stack direction="block" gap="small">
-              <s-text tone="subdued">Awaiting order link</s-text>
-              <s-heading>{pendingReceipts}</s-heading>
-            </s-stack>
-          </s-card>
-          <s-card border>
-            <s-stack direction="block" gap="small">
               <s-text tone="subdued">Current plan</s-text>
               <s-heading>{planName ?? "No active plan"}</s-heading>
             </s-stack>
@@ -114,11 +137,7 @@ export default function Dashboard() {
                     <s-text>{receipt.filename}</s-text>
                   </s-table-cell>
                   <s-table-cell>
-                    {receipt.orderId ? (
-                      <s-text>{receipt.orderName || `#${receipt.orderId}`}</s-text>
-                    ) : (
-                      <s-text tone="subdued">Not linked yet</s-text>
-                    )}
+                    <s-text>{receipt.orderName || `#${receipt.orderId}`}</s-text>
                   </s-table-cell>
                   <s-table-cell>
                     <s-text>{new Date(receipt.createdAt).toLocaleString()}</s-text>
